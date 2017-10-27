@@ -14,7 +14,7 @@ Through a series of techniques such as filtering, clustering for segmenting, and
 * Implement a perception pipeline
 * Train the classifier to detect objects
 * Detect different objects in 3 testing worlds
-*
+
 ### 1.2 Outcomes:
 * 3/3 objects detected in World 1
 * 5/5 objects detected in World 2
@@ -398,3 +398,10 @@ def pr2_mover(object_list):
     send_to_yaml(OUTPUT_FILENAME, yaml_output)
     print "[INFO] Dumping OUTPUT File ..."
 ```
+## 6. Improvements
+These are the following improvements I am interested in:
+* Improve the accuracy of object detection.
+* Perform collision mapping
+* Perform a robust pick and place operation
+
+![challenge](./images/challenge.png)
