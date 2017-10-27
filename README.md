@@ -11,10 +11,10 @@ Through a series of techniques such as filtering, clustering for segmenting, and
 ![pipeline](./images/pipeline.png)
 
 ### 1.1 Objectives:
-* Extract cluster of objects
+* Implement a perception pipeline
 * Train the classifier to detect objects
-* Detect objects in 3 testing worlds and determine appropriate action for PR-2 Robot
-
+* Detect different objects in 3 testing worlds
+*
 ### 1.2 Outcomes:
 * 3/3 objects detected in World 1
 * 5/5 objects detected in World 2
@@ -24,13 +24,15 @@ Through a series of techniques such as filtering, clustering for segmenting, and
 ![results](./images/results.png)
 
 ## 2. Sampling, Filtering, and Plane Fitting
-The objects in the environment are detected with the help of an RGB-D (red, green, blue - depth) camera. The data type representing the object is in the form of a point cloud. Point clouds need to be manipulated in order to decrease computational complexity, increase feature extraction, and/or any detection step.
+The objects in the environment are detected with the help of an RGB-D (red, green, blue - depth) camera. The data type representing an object is in the form of point clouds.
+
+Point clouds need to be manipulated in order to remove noise, decrease computational complexity, and/or increase feature extraction.
 
 ### 2.1 Voxel Sampling Point Clouds
-The word "pixel" is short for "picture element". Similarly, the word "voxel" is short for "volume element". The 3D point cloud can be divided into a regular 3D grid (right-image) of volume elements, similar to a 2D image divided into grids (left-image). Each individual cell in the grid is now a voxel and the 3D grid is known as a "voxel grid". The size of this grid is also called **leaf size**.
+Voxel stands for "volume element". The 3D point cloud can be divided into a regular 3D grid (right-image) of volume elements, similar to a 2D image divided into grids (left-image). Each individual cell in the grid is now a voxel and the 3D grid is known as a "voxel grid". The size of an individual voxel is also called **leaf size**.
 ![voxel_grid](./images/voxel_grid.png)
 
-A voxel grid filter allows you to downsample the data (along any dimension) by taking a spatial average of the points in the cloud confined within a voxel. The set of points which lie within the bounds of a voxel are assigned to that voxel and statistically combined into one output point. The point clouds are downsampled by choosing 3 different leaf sizes as shown below.
+A voxel grid filter allows you to downsample the data (along any dimension) by taking a spatial average of the points in the cloud confined within a voxel. The set of points which lie within the bounds of a voxel are assigned to that voxel and statistically combined into one output point. The point clouds are downsampled using a **leaf size** of `0.005`.
 
 ![voxel](./images/voxel.png)
 
@@ -67,7 +69,7 @@ There are two filters implemented in the project. They are **Pass-through** and 
   # PassThrough Filter
   pcl_passed  = passthrough_filter(pcl_voxed, axis='z', axis_min=0.6, axis_max=1.2)
   pcl_passed  = passthrough_filter(pcl_passed,axis='x', axis_min=0.3, axis_max=1.0)
-```
+  ```
 
 * **Statistical Outlier Filtering**: Due to the possibility of noise in our point cloud data, we need to remove the noise since it may lead to sparse outliers thereby corrupting the results. One of the techniques used to remove such outliers is to perform a statistical analysis in the neighborhood of each point. Then remove those points which do not meet a certain criteria. For each point in the point cloud, it computes the distance to all of its neighbors, and then calculates a mean distance.
 
@@ -85,7 +87,7 @@ There are two filters implemented in the project. They are **Pass-through** and 
 
   # Statistical Outlier Filtering
   pcl_cloud    = statistical_filter(pcl_cloud)
-```
+  ```
 
 ### 2.3 Plane Fitting of Point Clouds
 Now we have the both the table top and objects atop the table. Since we are only interested in the objects, we want to remove the table. We will do this by plane fitting points that correspond to the table. A very popular method called the **Random Sample Consensus** (RANSAC) is used for identifying points belonging to table.
@@ -226,9 +228,9 @@ def compute_normal_histograms(normal_cloud):
 ### 4.2 Support Vector Machines
 From the histograms generated using **HSV** color space and surface normals, we will first store all these features as the training set for our classifier. We use a supervised machine learning classifier called the **Support Vector Machines** (SVM) for training and testing our data. **SVM** work by applying an iterative method to a training dataset, where each item in the training set is characterized by a feature vector and a label.
 
-The list of models we are capturing features of are shown below. Features were captured for the objects from 50 different poses and by setting the **HSV** flag to True.
-
 ![capture](./images/capture.png)
+
+The list of models we are capturing features of are shown below. Features were captured for the objects from 50 different poses and by setting the **HSV** flag to True.
 
 ```python
 # list of models to capture features of
@@ -249,7 +251,7 @@ The features captured were trained using the **SVM** classifier. Two confusion m
 
 ![confusion_matrix](./images/confusion_matrix.png)
 
-Based on the classification performed above, an accuracy score of 87.75% is achieved (using 32 bins, 50 poses, and **HSV** flag set to True). Each cluster is then assigned a label.
+Based on the classification performed above, an accuracy score of 87.75% is achieved (using 32 bins, 50 poses, and **HSV** flag set to True).
 
 ```python
 # Classify the clusters! (loop through each detected cluster)
@@ -288,10 +290,10 @@ for index, pts_list in enumerate(cluster_indices):
 ```
 
 ## 5. Pick and Place Results
-The final task is to execute a `ROS` node that performs the perception pipeline (outlined above) and waits for a `ROS` service to pick and place the detected objects.
+The final task is to execute a **ROS** node that performs the perception pipeline (outlined above) and waits for a **ROS** service to pick and place the detected objects.
 
 ### 5.1 Get Object information
-First, I created a class that will contain about an object's name, which arm of PR-2 robot should pick it up, which box to be dropped in, its picking position, and finally its dropping position.
+A Python class is created that contains information about an object's name, which arm of PR-2 robot for picking up the object, which box to be dropped in, picking position of object, and finally dropping position of object inside the box.
 
 ```python
 class get_object_info(object):
@@ -342,7 +344,7 @@ Based on the information collected for each object, a `PickPlace` service reques
 
 ![results](./images/results.png)
 
-The three output files are named - `output_1.yaml`, `output_2.yaml`, and `output_3.yaml`. 
+The three output files are named - `output_1.yaml`, `output_2.yaml`, and `output_3.yaml` which can be found in [`/outputs/`](https://github.com/mouhyemen/RoboND-Project3_Perception/tree/master/outputs) folder.
 ```python
 # function to load parameters and request PickPlace service
 def pr2_mover(object_list):
