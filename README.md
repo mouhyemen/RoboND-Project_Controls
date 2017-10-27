@@ -1,411 +1,398 @@
 
-# Project 2: Pick & Place Project
+# Project 3: Perception Project
 
 
 ## 1. Project Summary
-The goal of the project is to calculate the joint angles given the end-effector's pose for a 6 degree-of-freedom Kuka Arm 210 by applying principles of kinematics.
+The goal of the project is to detect a set of objects through the help of a perception pipeline and machine learning. The objects are represented as point clouds (an abstract data type) that contains information on the object's position, color, and/or intensity.
 
-![kuka_arm](https://github.com/mouhyemen/RoboND-Project2_Kinematics/blob/master/images/kuka_arm.png)
+Through a series of techniques such as filtering, clustering for segmenting, and machine learning methods, we are able to detect the objects.
+
+<!-- ![pipeline](https://github.com/mouhyemen/RoboND-Project3_Perception/blob/master/images/pipeline.png) -->
+![pipeline](./images/pipeline.png)
 
 ### 1.1 Objectives:
-* Calculate joint angles - θ1, θ2, θ3, θ4, θ5, θ6
-* Grasp the object from the shelf
-* Drop the object in the bin
+* Extract cluster of objects
+* Train the classifier to detect objects
+* Detect objects in 3 testing worlds and determine appropriate action for PR-2 Robot
 
 ### 1.2 Outcomes:
-* Calculated all joint angles (with optimized IK)
-* Grasped and placed 6 objects in the bin
-* Click on the image below to view the demo on YouTube. (<https://www.youtube.com/watch?v=1BXRThDDH1Q>)
+* 3/3 objects detected in World 1
+* 5/5 objects detected in World 2
+* 7/8 objects detected in World 3
+<!-- * Click on the image below to view the demo on YouTube. (<https://www.youtube.com/watch?v=1BXRThDDH1Q>) -->
 
-![pick_place](https://github.com/mouhyemen/RoboND-Project2_Kinematics/blob/master/images/pick_place.png)
+![results](./images/results.png)
 
+## 2. Sampling, Filtering, and Plane Fitting
+The objects in the environment are detected with the help of an RGB-D (red, green, blue - depth) camera. The data type representing the object is in the form of a point cloud. Point clouds need to be manipulated in order to decrease computational complexity, increase feature extraction, and/or any detection step.
 
-## 2. Forward Kinematics Analysis
-We use forward kinematics to find the end-effector's location in a frame of reference provided we know the joint angles.
+### 2.1 Voxel Sampling Point Clouds
+The word "pixel" is short for "picture element". Similarly, the word "voxel" is short for "volume element". The 3D point cloud can be divided into a regular 3D grid (right-image) of volume elements, similar to a 2D image divided into grids (left-image). Each individual cell in the grid is now a voxel and the 3D grid is known as a "voxel grid". The size of this grid is also called **leaf size**.
+![voxel_grid](./images/voxel_grid.png)
 
-### 2.1 Denavit-Hartenberg Derivation
-To find the joint angles for a robotic arm manipulator, we use Denavit-Hartenberg convention to derive a set of necessary parameters.
+A voxel grid filter allows you to downsample the data (along any dimension) by taking a spatial average of the points in the cloud confined within a voxel. The set of points which lie within the bounds of a voxel are assigned to that voxel and statistically combined into one output point. The point clouds are downsampled by choosing 3 different leaf sizes as shown below.
 
-The set of parameters in a DH table are:
-
-Name | Symbol | Definition
---- | :---: | --- |
-Joint angle | θ(i)  | Angle between x(i-1) and x(i) about z(i)
-Link offset | d(i)  | Distance from x(i-1) to x(i) along z(i)
-Link length | a(i-1)  | Distance from z(i-1) to z(i) along x(i-1)
-Twist angle | α(i-1)  | Angle between z(i-1) and z(i) about x(i-1)
-
-
-![gripper_frame](https://github.com/mouhyemen/RoboND-Project2_Kinematics/blob/master/images/gripper_frame.png)
-
-The set of derived DH parameters are shown below.
-
-Links   | θ(i)  | d(i)  | a(i-1) | α(i-1)
----   | ---     | ---   | ---    | ---
-0->1  | q1*     | d1  | 0   |  0
-1->2  |q2* - 90 | 0   | a1  | -90
-2->3  | q3*     | 0   | a2  |  0
-3->4  | q4*   | d4  | a3  | -90
-4->5  | q5*     | 0   | 0   |  90
-5->6  | q7*     | 0   | 0   | -90
-6->EE   | qG*     | dG  | 0   | 0
-
-Every joint in the Kuka arm are revolute joints and determine the angular rotation for the *i-th joint* - hence marked by qi*. Between `Joint 2` and `Joint 3`, there is an offset of 90 degrees which needs to be accounted for.
-
-The values for the link offsets and link lengths are:
-`d1 = 0.75, d4 = 1.50, dG = 0.303` and `a1 = 0.35,  a2 = 1.25, a3 = -0.054`
-
-### 2.2 Homogeneous Transformation Matrix
-The homogeneous transform is a 4x4 matrix that contains information of the orientation and position of a frame in another reference frame.
-
-
-![transform](https://github.com/mouhyemen/RoboND-Project2_Kinematics/blob/master/images/transform.png)
-
-
-The transform for each individual joint is shown below.
-
-
-![joint_transforms](https://github.com/mouhyemen/RoboND-Project2_Kinematics/blob/master/images/joint_transforms.png)
-
-
-The equation for calculating a homogeneous transform between two reference frames and its resultant output is shown below
-
-
-![h_transform](https://github.com/mouhyemen/RoboND-Project2_Kinematics/blob/master/images/h_transform.png)
-
-
-The following code is used for generating the homogeneous transform for a set of DH parameters.
+![voxel](./images/voxel.png)
 
 ```python
-# Calculating homogenous transformation with a set of DH parameters
-def H_transform(alpha, a, d, theta):
-  cT, sT = cos(theta), sin(theta)
-  cA, sA = cos(alpha), sin(alpha)
+# Samples the point cloud using the LEAF size
+def voxel_sample(pcloud, leaf=0.005):
+    # Voxel Grid Downsampling
+    vox         = pcloud.make_voxel_grid_filter()
+    leaf_size   = leaf   # leaf/voxel (volume-element) size
+    vox.set_leaf_size(leaf_size, leaf_size, leaf_size)
+    return vox.filter()  # voxel downsampled point cloud
 
-  A = Matrix([
-    [ cT  ,   -sT,    0,    a   ],
-    [sT*cA, cT*cA,  -sA,  -d*sA ],
-    [sT*sA, cT*sA,   cA,   d*cA ],
-    [  0  ,     0,    0,     1  ]
-    ])
-  return A
+# Voxel Grid Downsampling
+pcl_voxed   = voxel_sample(pcl_cloud)
 ```
 
-For calculating the homogeneous transform between the `gripper_link` and `base_ink`, an extrinsic body fixed rotations are performed. The sequence of operations involve performing a roll along x-axis, pitch along y-axis, and yaw along z-axis. For extrinsic rotations, we pre-multiply the sequence of operations like this:
+### 2.2 Filtering Point Clouds
+Filtering allows to remove regions in our point cloud that we are otherwise not interested in. This could imply removing areas of point cloud that are useless to us or even removing noise which is essential for robust detection.
 
-`R0_EE = Rot(Z, yaw) * Rot(Y, pitch) * Rot(X, roll)`
+There are two filters implemented in the project. They are **Pass-through** and **Statistical Outlier** filtering techniques.
 
-To align the URDF model of the robot with the DH parameters, we apply a transformation to the gripper by rotating first along the z-axis by 180, and then rotating about the y-axis by -90 degrees.
+* **Pass-through Filtering**: Having prior knowledge of the objects we are interested in, there may be regions we are not interested in and want to crop out. The pass-through filter is akin to a cropping tool, where we remove 3D point cloud along a certain dimension by specifying a minimum and maximum limit along that dimension. The region that we let _pass through_ is the called the **_region of interest_**. Only the objects on top of the table are of interest to us, hence we let the table top and the objects pass through.
 
-`R_corr = Rot(Z, 180) * Rot(Y, -90)`
+  ![passthrough](./images/passthrough.png)
 
-Hence, `R0G = R0_EE * R_corr`.
+  ```python
+  # Filters the point cloud along a certain axis between min and max limits
+  def passthrough_filter(pcloud, axis='z', axis_min=0.6, axis_max=1.2):
+      passthrough = pcloud.make_passthrough_filter()
+      passthrough.set_filter_field_name(axis)
+      passthrough.set_filter_limits(axis_min, axis_max)
+      return passthrough.filter()
 
-The following code is used for performing extrinsic rotations linking the `gripper_link` and `base_link` as well as performing a correctional transform to the rotation matrix.
-
-```python
-# extrinsic rotation matrix calculation
-def r_zyx(roll, pitch, yaw):
-  R_x = Matrix([
-    [1,         0,          0],
-    [0, cos(roll), -sin(roll)],
-    [0, sin(roll),  cos(roll)]
-    ])
-
-  R_y = Matrix([
-    [ cos(pitch), 0, sin(pitch)],
-    [          0, 1,          0],
-    [-sin(pitch), 0, cos(pitch)]
-    ])
-
-  R_z = Matrix([
-    [cos(yaw),-sin(yaw), 0],
-    [sin(yaw), cos(yaw), 0],
-    [       0,        0, 1]
-    ])
-
-  return R_z*R_y*R_x
-# Create rotation transform from end-effector as seen from ground frame
-R0_EE   = r_zyx(roll, pitch, yaw)
-
-# Align EE from URDF to DH convention by multiplying with correction-matrix
-R_corr  = r_zyx(0, -pi/2, pi)
-R0_EE   = R0_EE*R_corr
+  # PassThrough Filter
+  pcl_passed  = passthrough_filter(pcl_voxed, axis='z', axis_min=0.6, axis_max=1.2)
+  pcl_passed  = passthrough_filter(pcl_passed,axis='x', axis_min=0.3, axis_max=1.0)
 ```
 
-## 3. Inverse Kinematics Analysis
-We use inverse kinematics to find the joint angles of a robotic arm in a frame of reference given the pose of the end-effector.
+* **Statistical Outlier Filtering**: Due to the possibility of noise in our point cloud data, we need to remove the noise since it may lead to sparse outliers thereby corrupting the results. One of the techniques used to remove such outliers is to perform a statistical analysis in the neighborhood of each point. Then remove those points which do not meet a certain criteria. For each point in the point cloud, it computes the distance to all of its neighbors, and then calculates a mean distance.
 
-The Kuka Arm has a total of 6 joints where every joint is revolute. `Joints 4, 5, 6` form the spherical wrist of the arm with `Joint 5` being the wrist center. For performing inverse kinematics, we decouple the system into 2 parts.
+  ![statistical](./images/statistical.png)
 
-The first part consists of `Joints 1, 2, 3` which are responsible for determining the position of the wrist center also called *Inverse Position*.
+  ```python
+  # Filter out outliers using statistical outlier filtering.
+  # k_mean    --> number of neighboring points to analyze
+  # threshold --> scale factor
+  def statistical_filter(pcloud, k_mean=10, threshold=0.003):
+      outlier_filter = pcloud.make_statistical_outlier_filter()
+      outlier_filter.set_mean_k(k_mean)
+      outlier_filter.set_std_dev_mul_thresh(threshold)
+      return outlier_filter.filter()
 
-The second part consists of `Joints 4, 5, 6` which are responsible for determining the orientation of the wrist center also called *Inverse Orientation*.
-
-### 3.1 Inverse Position
-We first find the wrist center's position which is marked by the red vector in the diagram below. The green vector represents the end-effector's position from the ground frame relative to the ground frame. The black vector represents the end-effector's position in the wrist-center's frame relative to the ground frame.
-
-
-![wc_figure](https://github.com/mouhyemen/RoboND-Project2_Kinematics/blob/master/images/wc_figure.png)
-
-
-![wrist_center](https://github.com/mouhyemen/RoboND-Project2_Kinematics/blob/master/images/wrist_center.png)
-
-
-By doing a simple vector subtraction, we can find the wrist-center's location in the ground frame relative to the ground frame. We use the following equation to find the wrist center's position. The corresponding vector's mathematical representation is color coded.
-
-```python
-  # Find wrist-center (WC) location
-  wx = px - dG*R0_EE[0,2]
-  wy = py - dG*R0_EE[1,2]
-  wz = pz - dG*R0_EE[2,2]
+  # Statistical Outlier Filtering
+  pcl_cloud    = statistical_filter(pcl_cloud)
 ```
 
-#### 3.1.1 - Finding cartesian distances between joints
-Before finding all the angles, first let us find all the cartesian distances between `Joint 2`, `Joint 3`, and `Wrist Center`. We are interested in `a, b, c`. Parameters used for deriving a particular side has been color-coded.
-`a = a2` (just the link length between joints 2 and 3)
+### 2.3 Plane Fitting of Point Clouds
+Now we have the both the table top and objects atop the table. Since we are only interested in the objects, we want to remove the table. We will do this by plane fitting points that correspond to the table. A very popular method called the **Random Sample Consensus** (RANSAC) is used for identifying points belonging to table.
 
-`b = √(a3 * a3 + d4 * d4)` *(color coded in green)*
+We extract two pieces of information - **inliers** and **outliers**. The inliers are all points corresponding to the table while the outliers correspond to the table placed on the table. We are interested in the outliers.
 
-`c = √(cx * cx + cz * cz)` *(color coded in red)*
-
-where `cx = r_wc - a1` and `cz = wz - d1`
-
-and `r_wc = √(wx * wx + wy * wy)` *(color coded in blue)*
-
-![distances](https://github.com/mouhyemen/RoboND-Project2_Kinematics/blob/master/images/distances.png)
+![outliers_inliers](./images/outliers_inliers.png)
 
 ```python
-  # Finding cartesian distances b/w joints 2, 3, and WC
-  r_wc = hypotenuse(wx, wy)    # vector proj on x-y plane of WC
-  a    = a2
-  b    = hypotenuse(a3, d4)
-  c    = hypotenuse(r_wc-a1, wz-d1)
-```
-#### 3.1.2 - Finding angles θ1, θ2, θ3
-* θ1: For finding θ1, we project the vector going from the `base_link` to the end-effector (or `gripper_link`) onto the `XY-plane` and apply an inverse tangent operation. The following diagram shows how θ1 is derived where `θ1 = atan2(wy, wx)`.
+# RANSAC plane fitting to find inliers within a certain distance
+def segment_ransac(pcloud, max_dist = 0.01):
+    seg_ransac  = pcloud.make_segmenter()
+    seg_ransac.set_model_type(pcl.SACMODEL_PLANE)
+    seg_ransac.set_method_type(pcl.SAC_RANSAC)
+    seg_ransac.set_distance_threshold(max_dist)
+    return seg_ransac.segment()
 
-![theta1](https://github.com/mouhyemen/RoboND-Project2_Kinematics/blob/master/images/theta1.png)
+# RANSAC Plane Segmentation
+inliers, coefficients = segment_ransac(pcl_passed) # Extract inliers
 
-* θ2: For finding θ2, we use law of cosines for finding angle β (color coded in red) and inverse tangent function for finding angle δ (color coded in blue). The following diagram shows how θ2 is derived where `θ2 = 90 - β - δ`.
-
-  `cosβ = (a*a + c*c - b*b) / (2 * a * c)`
-
-  `sinβ = √(1 - cosβ*cosβ)`
-
-  `β = atan2(sinβ, cosβ)` *(color coded in red)*
-
-  `δ = atan2(cz, cx)` *(color coded in blue)*
-
-	`δ = atan2(cz, cx)` *(color coded in blue)*
-	
-![theta2](https://github.com/mouhyemen/RoboND-Project2_Kinematics/blob/master/images/theta2.png)
-
-
-* θ3: For finding θ3, we use law of cosines for finding angle γ (color coded in red) and inverse tangent function for finding angle α (color coded in blue). The following diagram shows how θ3 is derived where `θ3 = - (γ - α)`.
-
-  `cosγ = (a*a + c*c - b*b) / (2 * a * c)`
-
-  `sinγ = √(1 - cosγ*cosγ)`
-
-  `γ = atan2(sinγ, cosγ)` (color coded in red)
-
-  `α = atan2(d4, a3)` (color coded in blue)
-
-	`α = atan2(d4, a3)` (color coded in blue)
-	
-![theta3](https://github.com/mouhyemen/RoboND-Project2_Kinematics/blob/master/images/theta3.png)
-
-
-```python
-          # Finding theta1
-          theta1 = atan2(wy, wx)    # project WC's vector on x-y plane
-          theta1 = theta1.evalf()
-
-          # Finding theta2 = 90 - Beta - Delta
-          beta   = cosine_angle(a, c, b)       # angle beta b/w a & c
-          delta  = atan2(wz - d1, r_wc - a1)
-          theta2 = pi/2 - beta - delta
-          theta2 = theta2.evalf()
-
-          # Finding theta3 = -(gamma - alpha)
-          gamma  = cosine_angle(a, b, c)       # angle gamma b/w a & b
-          alpha  = atan2(d4, a3)
-          theta3 = -(gamma - alpha)
-          theta3 = theta3.evalf()
+outlier_objects = pcl_passed.extract(inliers, negative=True)
+inlier_table    = pcl_passed.extract(inliers, negative=False)
 ```
 
-### 3.2 Inverse Orientation - Finding angles θ4, θ5, θ6
-For the inverse orientation problem, we will decompose the rotation transform from the `gripper_link` to the `base_link` as such:
-`R0G = R03 * R36 * R6G`
-`R03.inverse * R0G = R03.inverse * R03 * R36 * I` *(since the 6th frame and gripper frame have same orientation)*
-`R36 = R03' * R0G` *(since rotation matrix' inverse is its transpose)*
+## 3 Clustering for Segmentation
+Now that we have our objects on the table (retrieved as outliers from the RANSAC plane-fitting step), we need to cluster the point clouds associated with each object. After clustering we will segment out each object to be later trained by our classifier for object detection.
 
-We know `R0G` from the extrinsic body fixed rotations calculated earlier.
+We implemented the clustering algortithm with the help of Euclidean Clustering technique. First we convert the point cloud's XYZRGB data type to just XYZ data type. Then we cluster each point cloud through a series of parameters - `tolerance`, `minimum` and `maximum` cluster sizes.
 
-`R0_EE = Rot(Z, yaw) * Rot(Y, pitch) * Rot(X, roll)`
-
-`R_corr = Rot(Z, 180) * Rot(Y, -90)`
-
-`R0G = R0_EE * R_corr`
-
-Hence, `R36 = R03' * R0G` where the matrix R36 is shown below.
-
-
-![inverse_orient](https://github.com/mouhyemen/RoboND-Project2_Kinematics/blob/master/images/inverse_orient.png)
-
+![clustering](./images/clustering.png)
 
 ```python
-  # Rotational transform from 6th to 3rd frame
-  R3_0 = T0_3[:3, :3].transpose()   # take inverse (or transpose)
-  R3_6 = R3_0 * R0_EE
+def euclidean_cluster(pcloud, tol=0.01, min_size=75, max_size=12000):
+    tree    = pcloud.make_kdtree()
+    ec      = pcloud.make_EuclideanClusterExtraction()
+    ec.set_ClusterTolerance(tol)
+    ec.set_MinClusterSize(min_size)
+    ec.set_MaxClusterSize(max_size)
+    ec.set_SearchMethod(tree)   #Search k-d tree for clusters
+    return ec.Extract()  #Indices for each clusters
+
+def color_cluster(pcloud, cluster_indices):
+    # Create Cluster-Mask Point Cloud to see each cluster
+    cluster_color = get_color_list(len(cluster_indices))
+
+    color_cluster_point_list = []
+
+    for j, indices in enumerate(cluster_indices):
+        for i, index in enumerate(indices):
+            color_cluster_point_list.append([
+                pcloud[index][0],
+                pcloud[index][1],
+                pcloud[index][2],
+                rgb_to_float(cluster_color[j])
+                ])
+
+    #Create new cloud with all clusters, each with unique color
+    cluster_cloud = pcl.PointCloud_PointXYZRGB()
+    cluster_cloud.from_list(color_cluster_point_list)
+    return cluster_cloud
+
+# Euclidean Clustering
+white_cloud = XYZRGB_to_XYZ(outlier_objects)
+cluster_indices = euclidean_cluster(white_cloud)  #Indices for each object cluster on the table
+
+# Color each individual cluster
+cluster_cloud   = color_cluster(white_cloud, cluster_indices)
 ```
 
-* θ4: For finding θ4, we look at elements r13 and r33.
+## 4. Object Detection
+After clustering and segmenting out each individual object, we need to detect the object. Object detection is a fairly complex problem. Typically, features such as shape, color, and/or texture are used to determine an object. These features are then passed on to a classifier that trains and tests the data.
 
-  `θ4 = atan2(r33, -r13)`
-
-* θ5: For finding θ5, we look at elements r23.
-
-  `θ5 = atan2(√(1 - r23*r23), r23)`
-
-* θ6: For finding θ6, we look at elements r21 and r22.
-
-  `θ6 = atan2(-r22, r21)`
+### 4.1 Color Space and Surface Normals
+The **HSV** color model, which stands for Hue-Saturation-Value, is preferred over the standard **RGB** model for extracting color histograms. Since different objects can share the same color, we also use the surface normal of the object to distinguish an object from another further. We extract the histogram of these surface normals as well.
 
 ```python
-  # Finding rotational components from 6th to 3rd frame
-  r33, r13 = R3_6[2,2], R3_6[0,2]
-  r23      = R3_6[1,2]
-  r22, r21 = R3_6[1,1], R3_6[1,0]
+def compute_color_histograms(cloud, using_hsv=False):
 
-  # Finding values of theta4, 5, and 6
-  theta4 = atan2(r33, -r13)
-  theta4 = theta4.evalf()
+    # Compute histograms for the clusters
+    point_colors_list = []
 
-  theta5 = atan2(√(1-r23*r23), r23)
-  theta5 = theta5.evalf()
+    # Step through each point in the point cloud
+    for point in pc2.read_points(cloud, skip_nans=True):
+        rgb_list = float_to_rgb(point[3])
+        if using_hsv:
+            point_colors_list.append(rgb_to_hsv(rgb_list) * 255)
+        else:
+            point_colors_list.append(rgb_list)
 
-  theta6 = atan2(-r22, r21)
-  theta6 = theta6.evalf()
+    # Populate lists with color values
+    channel_1_vals = []
+    channel_2_vals = []
+    channel_3_vals = []
+
+    for color in point_colors_list:
+        channel_1_vals.append(color[0])
+        channel_2_vals.append(color[1])
+        channel_3_vals.append(color[2])
+
+    nbin = 32
+    c1 = np.histogram(channel_1_vals, bins=nbin, range=(0,256))
+    c2 = np.histogram(channel_2_vals, bins=nbin, range=(0,256))
+    c3 = np.histogram(channel_3_vals, bins=nbin, range=(0,256))
+
+    # Concatenate the histograms into a single feature vector
+    ch_features = np.concatenate((c1[0], c2[0], c3[0])).astype(np.float64)
+
+    # Normalize the result
+    norm_features = ch_features / np.sum(ch_features)
+    return norm_features
+
+def compute_normal_histograms(normal_cloud):
+    norm_x_vals = []
+    norm_y_vals = []
+    norm_z_vals = []
+
+    for norm_component in pc2.read_points(normal_cloud,
+                                          field_names = ('normal_x', 'normal_y', 'normal_z'),
+                                          skip_nans=True):
+        norm_x_vals.append(norm_component[0])
+        norm_y_vals.append(norm_component[1])
+        norm_z_vals.append(norm_component[2])
+
+    nbin = 32
+    n1 = np.histogram(norm_x_vals, bins=nbin, range=(0,256))
+    n2 = np.histogram(norm_y_vals, bins=nbin, range=(0,256))
+    n3 = np.histogram(norm_z_vals, bins=nbin, range=(0,256))
+
+    # Concatenate the histograms into a single feature vector
+    n_features = np.concatenate((n1[0], n2[0], n3[0])).astype(np.float64)
+
+    # Normalize the result
+    norm_features = n_features / np.sum(n_features)
+
+    return norm_features
 ```
 
-## 4. Results
-The following section shows the Kuka Arm 210 grasping the object from the shelf and dropping it into the bin. The trajectory generated is followed by the Kuka Arm for the most part. There were times when the Kuka Arm does not follow the trajectory fully. This is due to the multiple solutions generated while calculating for joint angles.
+### 4.2 Support Vector Machines
+From the histograms generated using **HSV** color space and surface normals, we will first store all these features as the training set for our classifier. We use a supervised machine learning classifier called the **Support Vector Machines** (SVM) for training and testing our data. **SVM** work by applying an iterative method to a training dataset, where each item in the training set is characterized by a feature vector and a label.
 
-A demo video (<https://www.youtube.com/watch?v=1BXRThDDH1Q>) on YouTube shows the Kuka Arm in action where it is grasping an object from 6 different locations on the shelf and dropping into the bin. The video runs at 2x speed.
+The list of models we are capturing features of are shown below. Features were captured for the objects from 50 different poses and by setting the **HSV** flag to True.
 
-![object_grasp](https://github.com/mouhyemen/RoboND-Project2_Kinematics/blob/master/images/object_grasp.png)
-
-![object_drop](https://github.com/mouhyemen/RoboND-Project2_Kinematics/blob/master/images/object_drop.png)
-
-
----
-
-## 5. Optimizing Inverse Kinematics
-The initialization for all the homogeneous transforms are done outside of the main loop. To prevent numerical drift, only the transform from the *3rd-frame* to the ground frame is performed in every loop. The initialization function is shown below.
+![capture](./images/capture.png)
 
 ```python
-def initialize_transforms():
-  start = time.time()
-
-  # Creating global variables
-  global T0_3, T0_1, T1_2, T2_3, T0_EE
-  global q1, q2, q3, q4, q5, q6
-
-  # Define DH param symbols
-  d1, d2, d3, d4, d5, d6, d7 = symbols('d1:8')
-  a0, a1, a2, a3, a4, a5, a6 = symbols('a0:7')
-  alpha0, alpha1, alpha2, alpha3, alpha4, alpha5, alpha6 = symbols('alpha0:7')
-
-  # Joint angle symbols
-  q1, q2, q3, q4, q5, q6, q7 = symbols('q1:8')
-
-  # Modified DH params
-  theta1, theta2, theta3 = q1, q2 - pi/2, q3
-  theta4, theta5, theta6 = q4, q5, q6
-  theta7 = q7
-
-  s = {alpha0:     0, a0:   0   , d1: 0.75,
-       alpha1: -pi/2, a1: 0.35  , d2: 0,
-       alpha2:     0, a2: 1.25  , d3: 0,
-       alpha3: -pi/2, a3: -0.054, d4: 1.5,
-       alpha4:  pi/2, a4:   0   , d5: 0,
-       alpha5: -pi/2, a5:   0   , d6: 0,
-       alpha6:     0, a6:   0   , d7: 0.303, q7: 0}
-
-
-  # Define Modified DH Transformation matrix
-  T0_1  = H_transform(alpha0, a0, d1, theta1)
-  T1_2  = H_transform(alpha1, a1, d2, theta2)
-  T2_3  = H_transform(alpha2, a2, d3, theta3)
-  T3_4  = H_transform(alpha3, a3, d4, theta4)
-  T4_5  = H_transform(alpha4, a4, d5, theta5)
-  T5_6  = H_transform(alpha5, a5, d6, theta6)
-  T6_EE = H_transform(alpha6, a6, d7, theta7)
-
-  # Create individual transformation matrices
-  T0_1  = T0_1.subs(s)
-  T1_2  = T1_2.subs(s)
-  T2_3  = T2_3.subs(s)
-  T3_4  = T3_4.subs(s)
-  T4_5  = T4_5.subs(s)
-  T5_6  = T5_6.subs(s)
-  T6_EE = T6_EE.subs(s)
-  T0_3  = T0_1*T1_2*T2_3
-
-  T0_EE = T0_1*T1_2*T2_3*T3_4*T4_5*T5_6*T6_EE
-
-  print "[INITIALIZATION TIME] Time %04.4f seconds." % (time.time() - start)
+# list of models to capture features of
+models = [\
+   'biscuits',
+   'soap2',
+   'soap',
+   'book',
+   'glue',
+   'sticky_notes',
+   'snacks',
+   'eraser'
+   ]
 ```
 
-The intialization step happens outside of the callback function for the ROS service requesting for poses.
+### 4.3 Trained Results from classifier
+The features captured were trained using the **SVM** classifier. Two confusion matrices were generated - one without normalization, and the other with normalization. We are interested in the normalized confusion matrix, since it tells us the percentage of the total number of times the object is correctly (or incorrectly) detected versus the absolute raw count.
+
+![confusion_matrix](./images/confusion_matrix.png)
+
+Based on the classification performed above, an accuracy score of 87.75% is achieved (using 32 bins, 50 poses, and **HSV** flag set to True). Each cluster is then assigned a label.
 
 ```python
-def IK_server():
-    # initialize node and declare calculate_ik service
-    rospy.init_node('IK_server')
+# Classify the clusters! (loop through each detected cluster)
+detected_objects_labels = []
+detected_objects = []
 
-    # Initialize all DH parameters and relevant homogeneous transforms
-    initialize_transforms()
+for index, pts_list in enumerate(cluster_indices):
+    # Grab the points for the cluster
+    pcl_cluster  = outlier_objects.extract(pts_list)
+    sample_cloud = pcl_to_ros(pcl_cluster)
 
-    # Request service of type CalculateIK
-    s = rospy.Service('calculate_ik', CalculateIK, handle_calculate_IK)
-    print "Ready to receive an IK request."
-    rospy.spin()
+    # Extract histogram features
+    colorHists  = compute_color_histograms(sample_cloud, using_hsv=True)
+    normals     = get_normals(sample_cloud)
+    normalHists = compute_normal_histograms(normals)
 
-if __name__ == "__main__":
-    global error
+    # Compute the associated feature vector
+    feature = np.concatenate((colorHists, normalHists))
+    # labeled_features.append([feature, model_name])
 
-    ap = argparse.ArgumentParser()
-    ap.add_argument("-e", "--error", type=int, default=-1)
-    args    = vars(ap.parse_args())
-    error   = args["error"]
+    # Make the prediction
+    prediction = clf.predict(scaler.transform(feature.reshape(1,-1)))
+    label = encoder.inverse_transform(prediction)[0]
+    detected_objects_labels.append(label)
 
-    IK_server()
+    # Publish a label into RViz
+    label_pos = list(white_cloud[pts_list[0]])
+    label_pos[2] += .4
+    object_markers_pub.publish(make_label(label,label_pos, index))
+
+    # Add the detected object to the list of detected objects.
+    do          = DetectedObject()
+    do.label    = label
+    do.cloud    = ros_cloud_cluster
+    detected_objects.append(do)
 ```
 
-## 6. Calculating Forward Kinematics error
-A flag can be accepted from the user for performing error analysis on the end-effector's position calculated by using forward kinematics and the end-effector's location provided as input from the `pose`.
+## 5. Pick and Place Results
+The final task is to execute a `ROS` node that performs the perception pipeline (outlined above) and waits for a `ROS` service to pick and place the detected objects.
 
-The segment of code responsible for performing this error analysis is shown below:
+### 5.1 Get Object information
+First, I created a class that will contain about an object's name, which arm of PR-2 robot should pick it up, which box to be dropped in, its picking position, and finally its dropping position.
 
 ```python
-# Calc FK EE error
-if error is 1:
-      FK = T0_EE.evalf(subs={q1: theta1, q2: theta2, q3: theta3, \
-      q4: theta4, q5: theta5, q6: theta6 })
-      ex = FK[0,3]
-      ey = FK[1,3]
-      ez = FK[2,3]
-      ee_x_e = abs(ex-px)
-      ee_y_e = abs(ey-py)
-      ee_z_e = abs(ez-pz)
-      ee_offset = math.sqrt(ee_x_e**2 + ee_y_e**2 + ee_z_e**2)
-      print ("\nEnd effector x-error: %04.5f" % ee_x_e)
-      print ("End effector y-error: %04.5f" % ee_y_e)
-      print ("End effector z-error: %04.5f" % ee_z_e)
-      print ("Overall end effector error: %04.5f units \n" % ee_offset)
+class get_object_info(object):
+    def __init__(self, object):
+        # instantiate ROS messages
+        self.name       = String()  # name of object
+        self.arm_name   = String()  # choose left/right arm
+        self.pick_pose  = Pose()    # position to pick object
+        self.place_pose = Pose()    # position to drop object
 
-      print ("[TOTAL RUN TIME: IK & FK] %04.4f seconds" % (time.time()-kinematics_start_time))
+        # additional information
+        self.group  = None  # color of box to drop object
+
+        # start defining object attributes
+        # --> name of the object comes from object.label
+        self.name.data  = str(object.label)
+
+        # --> picking position of object needs centroid calculation
+        points  = ros_to_pcl(object.cloud).to_array()
+        x, y, z = np.mean(points, axis = 0)[:3]
+        self.pick_pose.position.x = np.asscalar(x)
+        self.pick_pose.position.y = np.asscalar(y)
+        self.pick_pose.position.z = np.asscalar(z)
+
+    # class method for placing object in right place
+    # from pick_list and drop_list info
+    def place_object(self, pick_list, drop_list):
+        # --------   GET COLOR OF BOX    -----------
+        for i, object in enumerate(pick_list):
+            # if object in picking list is same as object defined in class
+            if object['name'] == self.name.data:
+                self.group = object['group']    # box color to drop object
+                break
+
+        # -------- POSITION TO DROP OBJECT ---------
+        for i, box in enumerate(drop_list):
+            if box['group'] == self.group:
+                self.arm_name.data   = box['name']
+                x, y, z         = box['position']
+                self.place_pose.position.x = np.float(x)
+                self.place_pose.position.y = np.float(y)
+                self.place_pose.position.z = np.float(z)
+                break
+```
+
+### 5.2 Generating YAML Outputs
+Based on the information collected for each object, a `PickPlace` service request is called. This routine contains information about each detected object. This is tested in 3 different worlds.
+
+![results](./images/results.png)
+
+The three output files are named - `output_1.yaml`, `output_2.yaml`, and `output_3.yaml`. 
+```python
+# function to load parameters and request PickPlace service
+def pr2_mover(object_list):
+
+    # Set test_scene information (from launch file)
+    test_scene = Int32()
+    test_scene.data = TEST_NUMBER   # global constant declared above
+
+    # TODO: Get/Read parameters
+    pick_list = rospy.get_param('/object_list')
+    drop_list = rospy.get_param('/dropbox')
+
+    yaml_output = []
+    for object in object_list:
+        # get the information of an object from the list
+        # using the class "get_object_info"
+        object_info = get_object_info(object)
+
+        # place the object
+        object_info.place_object(pick_list, drop_list)
+
+        # get yaml for the object
+        yaml_object = make_yaml_dict(test_scene,
+            object_info.arm_name,
+            object_info.name,
+            object_info.pick_pose,
+            object_info.place_pose)
+
+        # Append yaml information to the yaml list
+        yaml_output.append(yaml_object)
+
+        # Wait for 'pick_place_routine' service to come up
+        rospy.wait_for_service('pick_place_routine')
+
+        try:
+            pick_place_routine = rospy.ServiceProxy('pick_place_routine', PickPlace)
+
+            # TODO: Insert your message variables to be sent as a service request
+            resp = pick_place_routine(test_scene,
+                object_info.name,
+                object_info.arm_name,
+                object_info.pick_pose,
+                object_info.place_pose)
+
+            print ("Response: ",resp.success)
+
+        except rospy.ServiceException, e:
+            print "Service call failed: %s"%e
+
+    # TODO: Output your request parameters into output yaml file
+    send_to_yaml(OUTPUT_FILENAME, yaml_output)
+    print "[INFO] Dumping OUTPUT File ..."
 ```
